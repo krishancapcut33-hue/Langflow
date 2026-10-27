@@ -129,6 +129,7 @@ from langflow.services.integration_policy_discovery import (
     aenforce_integration_policy_for_component,
     filter_component_palette_by_integration_policy,
 )
+from langflow.services.rate_limit import check_rate_limit
 from langflow.services.telemetry.schema import RunPayload
 from langflow.services.triggers.reconciliation import find_trigger_nodes
 from langflow.utils.flow_secrets import restore_request_variable_references, strip_secret_field_values
@@ -990,6 +991,15 @@ async def get_webhook_auth(
     webhook_nodes = [node for node in get_all_webhook_components_in_flow(flow.data) if node["id"] not in trigger_ids]
     if not webhook_nodes:
         raise HTTPException(status_code=404, detail=f"Flow identifier {flow_id_or_name} not found")
+    settings_service = get_settings_service()
+    # Without webhook auth the caller is anonymous, so throttle it per client IP like a public flow.
+    # The scope uses the resolved flow ID so the ID and the endpoint name share one counter.
+    if not settings_service.auth_settings.WEBHOOK_AUTH_ENABLE and settings_service.settings.rate_limit_enabled:
+        check_rate_limit(
+            request,
+            scope=f"webhook:{flow.id}",
+            limit_per_minute=settings_service.settings.public_flow_rate_limit_per_minute,
+        )
     return WebhookAuth(user=webhook_user, flow=flow)
 
 
